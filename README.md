@@ -1,6 +1,12 @@
 # Springboard-FDS-Capstone-submission
 Springboard Foundations of Data Science Capstone project - final submission
 
+Required submissions:
+1. Code for your project, well-documented on github: **Refer all .R files prefixed with "code-"**
+2. A final paper explaining the problem, your approach and your findings in complete technical detail. Include ideas for further research, as well as up to 3 concrete recommendations for your client on how to use your findings: **Refer to fds-capstone-jameshooi-AFL-040-report.html, link: http://rawgit.com/r3nault/Springboard-FDS-Capstone-submission/master/fds-capstone-jameshooi-AFL-040-report.html#1**
+3. A slide deck or a blog post which presents your analysis to your clients (e.g. non-technical and business teams) in an easy to understand, but compelling way. As a data scientist in a company, you’ll be frequently called upon to produce these kinds of materials: **Refer to fds-capstone-jameshooi-AFL-report-final.pptx or pdf version http://rawgit.com/r3nault/Springboard-FDS-Capstone-submission/master/fds-capstone-jameshooi-AFL-report-final.pdf**
+
+
 # Project description
 This analysis is a proof-of-concept using data science techniques in a sports analytics context; to predict and interpret winning factors in Australian-rules Football League (AFL) from player performance metrics.
 
