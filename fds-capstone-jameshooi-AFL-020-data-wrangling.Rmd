@@ -1,0 +1,337 @@
+---
+title: "AFL: Player attribute influence on results"
+subtitle: "Data Wrangling"
+author: James Hooi
+css: ioslides.css
+output: ioslides_presentation
+widescreen: true
+logo: afl_logo.png
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+# set working directory
+setwd("C:\\Users\\james.hooi\\Documents\\data analytics\\Springboard-FDS-Capstone")
+# load required libraries
+library(dplyr)
+library(tidyr)
+library(data.table)
+library(xlsx)
+options(width=200)
+# load raw data frames
+  # Get saved player metrics data, data frame: cons.df
+    # NOTE: player data in three files, will overwrite cons.df so save data each time
+    load(file = ".\\playerstats_2012to2017.Rda")
+    raw.player.metrics <- cons.df %>% mutate(GF.1 = NA) %>% filter(Year == "2017")
+    rm("cons.df")
+# Get team results
+  raw.team.res <- read.xlsx2(file = ".\\match-results-prep.xlsx", sheetName = "r_version", stringsAsFactors = FALSE)
+  raw.team.res <- raw.team.res %>% filter(season == "2017")
+```
+
+## Revisit: Purpose & Objective
+**As coach, how can I build, select or train my AFL team to maximise success?** (game snippet: [youtube.com/watch?v=QH188gSGnsk](https://www.youtube.com/watch?v=QH188gSGnsk))
+<div style="margin-left:-50px; margin-top:0px; margin-bottom:-60px">
+<img src="AFL_graphics1080x441.png"></img>
+</div>
+### Hypothesis
+The core hypothesis of the analysis is that **AFL player performance data** recorded from competitive matches can be used to identify key success criteria and in turn **predict match results**.
+
+## Data sources and key variables
+Data for this project was collected from [afltables.com](https://afltables.com) as this site was easy and free to extract from compared to the official AFL or Champion Data sites.
+
+### x variables
+The player metrics are the x variables; that is, the hypothesis is the players' performance as aggregated at team level can explain and predict the match result. See example here (one team, one season, round-by-round): [afltables.com/afl/stats/teams/geelong/2017_gbg.html](https://afltables.com/afl/stats/teams/geelong/2017_gbg.html)
+<div style="margin-left:0px; margin-top:10px; margin-bottom:10px">
+<img src="player_metrics_eg_85pc.png"></img>
+</div>
+In total, I analysed 15 seasons worth of data for 16-18 teams (the number of teams has not been consistent over that timeframe). Due to the number of combinations of seasons and teams, I scraped this data with R.
+
+## Data sources and key variables (cont'd)
+
+### y variable
+The metric I am seeking to predict is the team result for a given match. See example here (one season, round-by-round): [afltables.com/afl/seas/2017.html](https://afltables.com/afl/seas/2017.html)
+<div style="margin-left:0px; margin-top:10px; margin-bottom:10px">
+<img src="team_results_eg_70pc.png"></img>
+</div>
+I analysed the same 15 seasons for the teams. This data was easy to copy manually and extract via Excel.
+
+## Scraping player metrics
+If we take the minimum number of 16 teams, multiplied by 15 seasons, there are at least 240 pages of data to copy, on top of which rules would be required to extract the data into fields.
+
+Instead, I scraped the data six years at a time using html manipulation package **rvest**. The code is flexible enough to go back 50 or 100 years if desired.
+
+### Environment set-up:
+```{r scrape1, eval=FALSE, echo=TRUE}
+#### CONSTANTS ####
+  start.yr <- 2012
+  end.yr <- 2017
+  # Team aliases and start dates (allowing for teams with shorter histories)
+    # Alias to be used in the analysis
+    current.teams.alias <- c("Adelaide","Brisbane","Carlton","Collingwood","Essendon","Fremantle","Geelong",
+                             "Gold Coast","Greater Western Sydney","Hawthorn","Melbourne","North Melbourne",
+                             "Port Adelaide","Richmond","St Kilda","Sydney","West Coast","Western Bulldogs")
+    # Alias for generating URLs to scrape data
+    current.teams.url <- c("adelaide","brisbanel","carlton","collingwood","essendon","fremantle","geelong",
+                           "goldcoast","gws","hawthorn","melbourne","kangaroos","padelaide","richmond","stkilda",
+                           "swans","westcoast","bullldogs")
+    # Start years for each team
+    current.teams.start.yr <- c(1991,1997,1897,1897,1897,1995,1897,2011,2012,1925,1897,1925,1997,1908,1897,1897,1987,1925)
+    # Round labels denoting finals games
+    finals.rounds <- c("QF","EF","SF","PF","GF")
+
+#### Load required libraries ####
+library(rvest)
+library(dplyr)
+```
+
+## Scraping player metrics (cont'd)
+### Main function
+This function opens the supplied URL in html, extracts the relevant headers and body and outputs an organised data frame.
+```{r scrape2, eval=FALSE, echo=TRUE}
+  # Open generated URL, extract data from html, return data frame
+  player.scraper.exec <- function(in.url, in.alias, in.year){
+    raw.html <- read_html(in.url)
+    # Extract relevant tags into vectors
+    data.headers <- raw.html %>% html_nodes(xpath="//thead//th") %>% html_text()
+    data.body <- raw.html %>% html_nodes(xpath="//tbody//td") %>% html_text()
+    # 1. Wrangle headers to understand the width of the data
+      # Extract all the metrics headers by removing specific strings (Player, Round, Tot headings), e.g. Disposals, Kicks, etc
+      stats.labels <- data.headers[!(
+        grepl(pattern = "Player", data.headers) | grepl(pattern = "R[0-9]+", data.headers) | data.headers %in% c(finals.rounds,"Tot")
+      )]
+      # Removing these values will leave just the player and round headings, e.g. Player, R1, R2 etc for each game played
+      stats.labels.rounds <- data.headers[!(data.headers %in% stats.labels)]
+      # Get number of rounds the team played, this tells us how many columns to create in the data frame
+      stats.rounds <- stats.labels.rounds[1:(length(stats.labels.rounds)/length(stats.labels))]
+    # 2. Wrangle the actual metrics from the body of the data
+      # Create data frame with correct number of columns for number of rounds played
+      sync.df <- as.data.frame(matrix(data.body, ncol=length(stats.rounds), byrow = TRUE), stringsAsFactors = FALSE)
+      colnames(sync.df) <- stats.rounds
+    # 3. Add information to identify the rows later
+      # Get the player names from the body, identifiable by the presence of a comma-space sequence in the string, e.g. Bews, Jed
+      team.players <- unique(data.body[grepl(pattern = "*,\\s*", data.body)])
+      # Add column with the metric being tracked, e.g. Disposals, Kicks, etc repeated for each player, for each round
+      sync.df[,"Metric"] <- rep(stats.labels, each=length(team.players))
+      # Add columns for team and year, e.g. Geelong, 2017
+      sync.df[,"Team"] <- rep(in.alias, times=nrow(sync.df))
+      sync.df[,"Year"] <- rep(in.year, times=nrow(sync.df))
+    # Take a nap (R dislikes running html scraping in a loop too rapidly!)
+    Sys.sleep(5)
+    # 4. Return the prepared data frame to function call
+    return(sync.df)
+  }
+```
+
+## Scraping player metrics (cont'd)
+### Other functions
+These functions exist to run the main function smoothly: generating the URL parameter and simplifying the function call to use **lapply**, which improves code performance (rather than using nested **for** loops).
+```{r scrape3, eval=FALSE, echo=TRUE}
+  # URL generator
+  player.scraper.url <- function(in.team, in.year){
+    return(paste0("https://afltables.com/afl/stats/teams/", in.team, "/", in.year, "_gbg.html"))
+  }  
+
+  # Simplify function call for LAPPLY
+  player.scraper.exec.do <- function(i){
+    # Print a line so we know where we're up to
+    print(paste(Sys.time(), "Extracting player data for", par.alias[i], par.years[i]))
+    # Call the URL extraction and return the generated data frame
+    inner.df <- player.scraper.exec(player.scraper.url(par.teams[i], par.years[i]), par.alias[i], par.years[i])
+    return(inner.df)
+  }
+```
+
+## Scraping player metrics (cont'd)
+### Execution
+This code uses the defined functions to actually execute the scraping. First, three synchronised vectors are set up to dynamically generate the URLs and other relevant parameters (using nested **for** loops doesn't lose much performance in this context). Second, **lapply** is used to sequence through the vectors and extract the data into a list of data frames. Finally, the list of data frames is consolidated into one with the correct dimensions, using a **for** loop.
+```{r scrape4, eval=FALSE, echo=TRUE}
+#### Prepare for extraction ####
+  # variables to hold URL generator parameters (team and year)
+  par.years <- c()
+  par.teams <- c()
+  par.alias <- c()
+  # for each year in scope
+  for(y in seq(start.yr, end.yr, by=1)){
+    # for each team, check if team had started by that year
+    for(t in 1:length(current.teams.url)){
+      if(current.teams.start.yr[t] <= y){
+        par.years <- c(par.years, y)
+        par.teams <- c(par.teams, current.teams.url[t])
+        par.alias <- c(par.alias, current.teams.alias[t])
+  } } }
+  # end result is three equal length vectors with each year and each team to feed to URL generator
+
+#### Load web pages and extract player data ####
+  # create sequencing variable and extract to list of data frames
+  x <- seq_along(par.teams)
+  list.df <- lapply(x, FUN = player.scraper.exec.do)
+  # consolidate in one data frame
+    # prepare master data frame with all required columns, up to 24 rounds plus finals plus totals
+    cons.headers = c("Player", paste0("R",seq(1,24,by=1)), finals.rounds, "Tot", "Metric", "Team", "Year")
+    cons.df <- as.data.frame(matrix(ncol = length(cons.headers), nrow = 0), stringsAsFactors = FALSE)
+    colnames(cons.df) <- cons.headers
+    # populate data from list of data frames
+    for(i in x){ cons.df <- union_all(cons.df, list.df[[i]]) }
+```
+
+## Data wrangling|Player metrics
+As the player metric data was scraped from html, it is structured well albeit as character strings. The data totals over 200K rows, showing a single player metric for every round. Due to volume of data, this R Markdown is filtered to the 2017 season only (~15K rows).
+```{r wranglingx1, echo=TRUE, warning=FALSE}
+  head(raw.player.metrics)
+```
+
+Wrangling was performed with **dplyr** and **tidyr** packages. The "Tot" (Total) column and "Subs" (Substitution) rows are not required as they don't provide meaningful data to analyse. The data was pivoted to a long format and non-ASCII characters removed. Metrics were converted to numeric, with NAs, blanks and dashes imputed as zeroes (confirmed by summing before and after in a spreadsheet).
+```{r wranglingx2, echo=TRUE, warning=FALSE}
+  player.metrics <- raw.player.metrics %>% select(-Tot) %>% filter(Metric != "Subs")
+  # Turn data into long format, clean non-ASCII characters
+  player.metrics <- player.metrics %>% 
+    gather(key = round, value = round_stat, -Player, -Metric, -Team, -Year) %>%
+    mutate(round_stat = iconv(trimws(round_stat, "both"), to = "ASCII", sub = ""), round_stat = if_else(!is.na(round_stat) & !(round_stat %in% c("","-")), as.numeric(round_stat), 0))
+  head(player.metrics)
+```
+```{r wranglingx2b, echo=FALSE, warning=FALSE}
+  # Clean data frame
+  rm("raw.player.metrics")
+```
+
+## Data wrangling|Player metrics (cont'd)
+The Metric column was trimmed and the data was pivoted back to wide format, but this time showing columns for metrics and rows for rounds, which is a more logical way of considering the data (by game). Columns were renamed as needed to make them easier to reference.
+```{r wranglingx3, echo=TRUE, warning=FALSE}
+  player.metrics <- player.metrics %>% mutate(Metric = trimws(Metric, "both")) %>% spread(key = Metric, value = round_stat) %>%
+  rename(Played_pct = `% Played`, Brownlow_votes = `Brownlow Votes`, Contested_marks = `Contested Marks`, Contested_possessions = `Contested Possessions`
+           , Frees_against = `Frees Against`, Goal_assists = `Goal Assists`, Hit_outs = `Hit Outs`, Inside_50s = `Inside 50s`
+           , Marks_inside_50 = `Marks Inside 50`, One_pct = `One Percenters`, Uncontested_possessions = `Uncontested Possessions`)
+  
+  head(player.metrics)
+```
+
+Next, a check on players with zero game time - did they participate? With ~146K rows showing no game time and a sum of only 5 across **all** metrics, we can safely ignore these. The 5 can be explained by players who get injured in the first 60-90 seconds of a match and play no further part (note: the output below shows different results due to filtering out of data).
+```{r wranglingx4, echo=TRUE, warning=FALSE}
+  print(paste("Total players with zero game time:", nrow(player.metrics[player.metrics$Played_pct==0, ]),
+      " Sum of all metrics for players with zero game time:", sum(player.metrics[player.metrics$Played_pct==0, 5:27])))
+```
+
+## Data wrangling|Player metrics (cont'd)
+So we filter out players with 0 Played_pct, and we remove non-meaningful metrics: Brownlow_votes (best & fairest voting) and Rebounds (not clear whether caused by defender skill or attacker mistake). Also adjusted the rounds so sorting alphabetically will sort them chronologically.
+```{r wranglingx5, echo=TRUE, warning=FALSE}
+  player.metrics <- player.metrics %>% filter(Played_pct > 0) %>% select(-Brownlow_votes, -Rebounds)
+
+  player.metrics$round <- sub("R([0-9])$", "R0\\1", player.metrics$round)
+  player.metrics$round <- sub("EF", "R25-EF", player.metrics$round, fixed = TRUE)
+  player.metrics$round <- sub("QF", "R25-QF", player.metrics$round, fixed = TRUE)
+  player.metrics$round <- sub("SF", "R26-SF", player.metrics$round, fixed = TRUE)
+  player.metrics$round <- sub("PF", "R27-PF", player.metrics$round, fixed = TRUE)
+  player.metrics$round <- sub("GF", "R28-GF", player.metrics$round, fixed = TRUE)
+  player.metrics$round <- sub("GF.1", "R29-GF2", player.metrics$round, fixed = TRUE)
+  player.metrics <- player.metrics %>% arrange(desc(Year), Team, round, Player)
+  
+  head(player.metrics)
+```
+
+At this point, the **player metric data is ready to use**.
+
+```{r wranglingx5b, echo=FALSE, warning=FALSE}
+  # Clean data frame
+  rm("player.metrics")
+```
+
+## Data wrangling|Team results
+The team results needed to be extracted in Excel and arrive in a messy form in R. In addition to **dplyr** and **tidyr**, I also used the **xlsx** and **data.table** packages. There are over 5.5K rows but this R Markdown is filtered for 2017 only (~400 rows).
+```{r wranglingy1, echo=TRUE, warning=FALSE}
+  head(raw.team.res)
+```
+
+The final scores are converted to integers, and at this point we need to define a function to parse the score string into quarter-end scores. These strings are currently formatted as cumulative *goals.behinds* for each quarter.
+```{r wranglingy2, echo=TRUE, warning=FALSE}
+raw.team.res$final_score <- as.integer(raw.team.res$final_score)
+
+parse_score_str <- function(in.score.str){
+  # remove white space and brackets
+  in.score.str <- trimws(in.score.str, "both")
+  in.score.str <- sub("\\(([0-9]+)\\.([0-9]+)\\)", "\\1\\.\\2", in.score.str)
+  # split into quarter scores by space
+  list.score.str <- strsplit(in.score.str, split = "\\s+")[[1]]
+  return.str.cumul <- c()
+  # loop through each score, turn score into a number, e.g. 4.2 (4 goals, 2 behinds)
+  for (Qs in list.score.str){
+    Qsnum_goals <- as.integer(sub("\\..*$", "", Qs))
+    Qsnum_behinds <- as.integer(sub("^.*\\.", "", Qs))
+    # add up scores by multiplying goals by 6 and behinds by 1, return string of quarter scores
+    Qsttl <- Qsnum_goals*6 + Qsnum_behinds*1
+    return.str.cumul <- paste(return.str.cumul, Qsttl)
+  }
+  return(trimws(return.str.cumul,"left")) }
+```
+
+## Data wrangling|Team results (cont'd)
+The data is ordered in pairs, where each pair is a single match result. To allow joining, create a match_id. With pairs, we can also add a win or loss result and final margin. At the same time, let's parse the score string into a string of numerical values we can interpret easily.
+```{r wranglingy3, echo=TRUE, warning=FALSE}
+  # Create a "match id" since every two rows is one match result, add basic row number
+  prep.team.res <- cbind(raw.team.res, match_id = rep(seq(1001, 1000+nrow(raw.team.res)/2, by=1), each=2)) %>% mutate(rownum = row_number()) %>% 
+  # group by match and add vs_opponent, result, margin
+  group_by(match_id) %>% 
+  mutate(vs_opponent = if_else(rownum == min(rownum), lead(teams, 1L), lag(teams, 1L))
+         , team_result = if_else(final_score == max(final_score) & final_score == min(final_score), "draw", if_else(final_score == max(final_score), "win", "loss"))
+         , final_margin = if_else(rownum == min(rownum), final_score - lead(final_score, 1L), final_score - lag(final_score, 1L))) %>% 
+  ungroup %>% 
+  # remove unnecessary match summary column and change score string to numerical scores
+  select(-match_summ) %>% rowwise %>% mutate(score_str = parse_score_str(score_str)) %>% ungroup
+
+  head(prep.team.res)
+```
+
+## Data wrangling|Team results (cont'd)
+Now let's parse out the quarter-end scores. I am unsure whether these will actually be used at this stage.
+```{r wranglingy4, echo=TRUE, warning=FALSE}
+# get list of the score strings
+  score.str.list <- lapply(prep.team.res$score_str, function (x) strsplit(as.character(x), split="\\s")[[1]])
+  # prepare columns for the cumulative quarter scores
+  prep.team.res$Q1score_cumul <- 0
+  prep.team.res$Q2score_cumul <- 0
+  prep.team.res$Q3score_cumul <- 0
+  prep.team.res$Q4score_cumul <- 0
+  prep.team.res$ETscore_cumul <- 0
+  # extract the quarter scores from the list, add to the data frame, adjust for the "fifth quarter" (extra time)
+  for(i in 1:nrow(prep.team.res)){
+    prep.team.res$Q1score_cumul[i] = as.integer(score.str.list[[i]][1])
+    prep.team.res$Q2score_cumul[i] = as.integer(score.str.list[[i]][2])
+    prep.team.res$Q3score_cumul[i] = as.integer(score.str.list[[i]][3])
+    prep.team.res$Q4score_cumul[i] = as.integer(score.str.list[[i]][4])
+    prep.team.res$ETscore_cumul[i] = if_else(!is.na(score.str.list[[i]][5]), as.integer(score.str.list[[i]][5]), NULL) }
+  # calculate the non-cumulative quarter scores and add to the data frame
+  prep.team.res <- prep.team.res %>% 
+    mutate(Q1score = Q1score_cumul, Q2score = Q2score_cumul - Q1score_cumul, Q3score = Q3score_cumul - Q2score_cumul
+           , Q4score = Q4score_cumul - Q3score_cumul, ETscore = ETscore_cumul - Q4score_cumul) %>% 
+    group_by(match_id) %>% 
+    # add a flag to indicate whether the team won the quarter, drawn quarter is won by no one so is 0 for both teams
+    mutate(Q1_win = if_else(Q1score == min(Q1score), 0, 1), Q2_win = if_else(Q2score == min(Q2score), 0, 1), Q3_win = if_else(Q3score == min(Q3score), 0, 1)
+           , Q4_win = if_else(Q4score == min(Q4score), 0, 1), ET_win = if_else(ETscore == min(ETscore), 0, 1))
+  
+  head(data.frame(prep.team.res), 4)
+```
+
+## Data wrangling|Team results (cont'd)
+Finally, wrangling to get terms and formats consistent with player metric data which will facilitate easy joining.
+
+```{r wranglingy5, echo=TRUE, warning=FALSE}
+  # adjustments to round
+  prep.team.res$round <- sub("Round\\s(.*)$", "R\\1", prep.team.res$round)
+  prep.team.res[which(prep.team.res$round=="Elimination Final"), "round"] <- "EF"
+  prep.team.res[which(prep.team.res$round=="Qualifying Final"), "round"] <- "QF"
+  prep.team.res[which(prep.team.res$round=="Semi Final"), "round"] <- "SF"
+  prep.team.res[which(prep.team.res$round=="Preliminary Final"), "round"] <- "PF"
+  prep.team.res[which(prep.team.res$round=="Grand Final"), "round"] <- "GF"
+  # adjustments to data type
+  prep.team.res$season <- as.numeric(prep.team.res$season)
+  # column rename and fix inconsistent team names
+  prep.team.res <- prep.team.res %>% rename(Year = season, Team = teams)
+  prep.team.res$Team <- sub("Brisbane Lions", "Brisbane", prep.team.res$Team, fixed = TRUE)
+  prep.team.res$Team <- sub("Kangaroos", "North Melbourne", prep.team.res$Team, fixed = TRUE)
+  prep.team.res$vs_opponent <- sub("Brisbane Lions", "Brisbane", prep.team.res$vs_opponent, fixed = TRUE)
+  prep.team.res$vs_opponent <- sub("Kangaroos", "North Melbourne", prep.team.res$vs_opponent, fixed = TRUE)
+
+  head(data.frame(prep.team.res), 6)
+```
+
+At this point, the **team results data is ready to use**.

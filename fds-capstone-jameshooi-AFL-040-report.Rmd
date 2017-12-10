@@ -1,0 +1,928 @@
+---
+title: "Australian Football League: How to win"
+subtitle: "Capstone Project Report"
+author: James Hooi
+css: ioslides.css
+output: ioslides_presentation
+widescreen: true
+logo: afl_logo.png
+---
+
+```{r setup, include=FALSE}
+# EVAL TURNED OFF: exploreplot01, exploreplot02, exploreplot03, exploreplot04, exploreplot11, exploreplot12, exploreplot13, exploreplot14, exploreplot15, exploreplot16a, select03
+
+knitr::opts_chunk$set(echo = FALSE)
+# set working directory
+  setwd("C:\\Users\\james.hooi\\Documents\\data analytics\\Springboard-FDS-Capstone")
+# load required libraries
+  library(dplyr)
+  library(tidyr)
+  library(ggplot2)
+  library(reshape2)
+  library(data.table)
+  
+  options(width=200)
+  
+  load(file=".\\player_metrics.Rda")
+  load(file=".\\team_results.Rda")
+```
+
+## Sport is about *Winning*
+
+Since the story of Moneyball and the Oakland A's became public, sport has begun a data-driven revolution. Elite sport is about winning and commercial success, and both are closely linked. Data analysis is giving teams the competitive edge in elite competition to "control the controllables" and tilt the game in their favour.
+
+This analysis sets out to link Australian Football League (AFL) player performance with team results (game snippet: [youtube.com/watch?v=QH188gSGnsk](https://www.youtube.com/watch?v=QH188gSGnsk)). My core hypothesis is that these links can identify **how to win** matches and **predict match results** for a season.
+
+<div style="margin-left:-50px; margin-top:0px; margin-bottom:-60px">
+<img src="AFL_graphics1080x441.png"></img>
+</div>
+
+## Data sources and key variables
+Data on the most recent 15 AFL seasons have been wrangled into two data frames:
+
+- Player metrics, forming the x variables to be aggregated at team level to explain and predict match results, and
+- Team results, the y variable I am seeking to predict.
+
+Detailed steps on scraping and wrangling can be found in this report: [rawgit.com/r3nault/Springboard-FDS-Capstone/master/fds-capstone-jameshooi-AFL-020-data-wrangling.html](https://rawgit.com/r3nault/Springboard-FDS-Capstone/master/fds-capstone-jameshooi-AFL-020-data-wrangling.html). I have loaded the libraries **dplyr**, **tidyr**, **data.table**, **ggplot2** and **reshape2** to R.
+
+```{r sourcedata, eval=TRUE, echo=TRUE, warning=FALSE}
+  head(data.frame(player.metrics), 5)
+  head(data.frame(team.results))
+```
+
+
+## Player metrics glossary
+
+Here is a set of very brief descriptions of the player metrics tracked during an AFL match:
+
+Term | Description | Term | Description
+---- | ----------- | ---- | -----------
+Goal | Kicking the ball through the taller centre posts (6 points) | **Behind** | Ball goes through the shorter side posts or “goal” is touched by a player before crossing the line (1 point)
+Goal assist | As the name suggests, assisting a teammate’s goal | **Hit out** | Tapping the ball from a "ball up" (umpire bounces or throws ball up for a contest)
+Disposal | Also called a possession; a kick or handball | **Kick** | Kicking the ball, usually to a team mate or goal
+Handball | Hit ball with a closed fist when held by opposite hand | **Contested possession** | Winning the ball in a contest and disposing of it
+Uncontested possession | Receiving or finding the ball in open space and disposing of it | **Clearance** | Clearing a disputed ball to team advantage
+Mark | Catching a kicked ball which has travelled at least 15m | **Mark inside 50** | A mark taken inside the attacking 50m arc
+Contested mark | A mark taken against one or more opponents or in a pack of players | **Inside 50** | Getting the ball inside the attacking 50m arc from goal
+Bounce | Running with the ball, a player must either bounce it or dispose of it within 15m | **Clanger** | An unforced error e.g. dropping an easy mark
+Tackle | Grabbing the player with the ball between knees and shoulders | **One percenter** | An act which shows extraordinary courage or effort
+Free kick against | Giving away a free kick to the opposition (being penalised)
+
+
+# Exploratory Analysis
+
+<!-- ## Functions for base exploratory analysis -->
+<!-- To explore range, median and interquartile range of player metrics, the following functions are defined: -->
+
+```{r plotfns, eval=TRUE, echo=FALSE, warning=FALSE}
+  pos.d = position_dodge(width = 0.35)
+  
+  # stat function to find range of plot
+  plot_range = function(x){ data.frame(ymin = min(x), ymax = max(x)) }
+  
+  # stat function to find median and interquartile range of plot
+  plot_med_IQR = function(x){ data.frame(y = median(x), ymin = quantile(x, probs=0.25), ymax = quantile(x, probs=0.75)) }
+  
+  # template line range plot, dummy variable for x, parameter for y, split out wins/losses and facet by year
+  plot_linerange_by_year = function(in_df, yvar, plot_title, plot_caption){
+    ggp = ggplot(in_df, aes_string(x=1, y=yvar, col="team_result")) +
+      stat_summary(geom = "linerange", fun.data = plot_med_IQR, position = pos.d, size = 0.8, alpha = 0.6) +
+      stat_summary(geom = "linerange", fun.data = plot_range, position = pos.d, size = 0.8, alpha = 0.3) +
+      scale_colour_manual(labels = c("Loss or draw","Win"), values = c("red","blue")) +
+      stat_summary(geom = "point", fun.y = median, position = pos.d, size = 1.1, shape = 15, alpha = 0.9) +
+      facet_grid(. ~ Year) +
+      labs(title = plot_title, color = "Result", caption = plot_caption) +
+      theme(axis.title.x = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_blank()
+            , axis.title.y = element_blank(), axis.text.y = element_text(size = 6), legend.position = "none"
+            , strip.text.x = element_text(size = 6.5, angle = 90)
+            , plot.title = element_text(size = 8), plot.caption = element_text(size = 7))
+    print(ggp)
+  }
+```
+
+## Explore: Data preparation
+A couple of steps are needed to shape data for visualisation. This prepares data by player showing match result:
+
+```{r dataprep1, eval=TRUE, echo=TRUE, warning=FALSE}
+  AFL.by.player = merge(player.metrics, team.results, by.x = c("Year","round","Team"), by.y = c("Year","round","Team")) %>% 
+  select(-score_str, -rownum, -(Q1score_cumul:ETscore)) %>% 
+  mutate(team_result = as.factor(if_else(team_result == "win", 1, 0)),
+         Q1_win = as.factor(Q1_win), Q2_win = as.factor(Q2_win), Q3_win = as.factor(Q3_win), Q4_win = as.factor(Q4_win),
+         ET_win = as.factor(ET_win), match_score_idx = final_score/(final_score - final_margin)) %>% 
+  select(-final_score, -final_margin)
+  head(AFL.by.player, 3)
+```
+
+Then the data needs to be aggregated by team taking the sum of player metrics:
+
+```{r dataprep2, eval=TRUE, echo=TRUE, warning=FALSE}
+  AFL.by.team = AFL.by.player %>% 
+  group_by(Year, round, Team, home_away, match_id, vs_opponent, team_result, Q1_win, Q2_win, Q3_win, Q4_win, ET_win, match_score_idx) %>% 
+  select(-Player, -Played_pct) %>% summarise_all(funs(sum)) %>% ungroup
+  head(AFL.by.team, 3)
+```
+
+## Explore: Visualising base metrics (pg.1 of 3)
+Metrics by year, showing median, IQR and range (Red/LHS = loss or draw, Blue/RHS = win):
+
+```{r exploreplot01, eval=TRUE, echo=FALSE, warning=FALSE, fig.height=2.4, fig.width=2.55}
+  plot_linerange_by_year(AFL.by.team, "Behinds","Behinds (1 point)", "65.9% confident win/loss difference positive")
+  plot_linerange_by_year(AFL.by.team, "Bounces","Running Bounces", "57.1% confident win/loss difference positive")
+  plot_linerange_by_year(AFL.by.team, "Clangers","Clangers (errors)", "58.7% confident win/loss difference negative")
+  plot_linerange_by_year(AFL.by.team, "Clearances","Clearances (disputed ball to advantage)", "59.9% confident win/loss difference positive")
+  plot_linerange_by_year(AFL.by.team, "Contested_marks","Contested marks (catch vs opponents)", "62.2% confident win/loss difference positive")
+  plot_linerange_by_year(AFL.by.team, "Contested_possessions","Contested possessions (gather-dispose)", "62.9% confident win/loss difference positive")
+  plot_linerange_by_year(AFL.by.team, "Disposals","Disposals (handball or kick)", "69.9% confident win/loss difference positive")
+  plot_linerange_by_year(AFL.by.team, "Frees","Free kicks awarded", "52.4% confident win/loss difference positive")
+```
+
+## Explore: Visualising base metrics (pg.2 of 3)
+Metrics by year, showing median, IQR and range (Red/LHS = loss or draw, Blue/RHS = win):
+
+```{r exploreplot02, eval=TRUE, echo=FALSE, warning=FALSE, fig.height=2.4, fig.width=2.55}
+  plot_linerange_by_year(AFL.by.team, "Frees_against","Free kicks given away", "52.0% confident win/loss difference negative")
+  plot_linerange_by_year(AFL.by.team, "Goal_assists","Goal assists", "81.3% confident win/loss difference positive")
+  plot_linerange_by_year(AFL.by.team, "Goals","Goals (6 points)","87.1% confident win/loss difference positive")
+  plot_linerange_by_year(AFL.by.team, "Handballs","Handballs", "57.5% confident win/loss difference positive")
+  plot_linerange_by_year(AFL.by.team, "Hit_outs","Hit-outs (win ball-up tap)", "53.6% confident win/loss difference positive")
+  plot_linerange_by_year(AFL.by.team, "Inside_50s","Inside 50s (ball enters 50m arc)", "77.9% confident win/loss difference positive")
+  plot_linerange_by_year(AFL.by.team, "Kicks","Kicks", "79.1% confident win/loss difference positive")
+  plot_linerange_by_year(AFL.by.team, "Marks","Marks (catches)", "68.1% confident win/loss difference positive")
+```
+
+## Explore: Visualising base metrics (pg.3 of 3)
+Metrics by year, showing median, IQR and range (Red/LHS = loss or draw, Blue/RHS = win):
+
+```{r exploreplot03, eval=TRUE, echo=FALSE, warning=FALSE, fig.height=2.4, fig.width=2.55}
+  plot_linerange_by_year(AFL.by.team, "Marks_inside_50","Marks inside 50 (catch inside 50m arc)","76.1% confident win/loss difference positive")
+  plot_linerange_by_year(AFL.by.team, "One_pct","1 percenters (exceptional effort)", "53.2% confident win/loss difference positive")
+  plot_linerange_by_year(AFL.by.team, "Tackles","Tackles", "53.6% confident win/loss difference positive")
+  plot_linerange_by_year(AFL.by.team, "Uncontested_possessions","Uncontested possessions (receive-dispose)", "65.9% confident win/loss difference positive")
+```
+
+### Insights from base metrics are very limited
+
+Whilst the exploratory analysis highlights some relationships in team-aggregated player metrics, these do not generate usable insights for an AFL team manager or coach. Applying basic game principles, the ability to win is predicated on scoring (measured by Behinds, Goal assists, Goals, Inside 50s, Marks inside 50) which in turn requires the team to possess the ball (measured by Clangers [negator], Disposals, Kicks, Marks, Uncontested possessions). To possess the ball, the team must first win it (Clearances, Contested marks, Contested possessions).
+
+Deeper insights are needed.
+
+
+# Indices & Statistical Analysis
+
+## Analysis: Sport is adversarial
+
+In analysing AFL team performance, it is important to remember the game is adversarial; i.e. player and team outcomes are impacted by the actions of opponents. This provides a vital lense to two key points: 1) the variability in a team's aggregated metrics due to changes in weather conditions etc can be ignored by performing comparisons with the opposing team (in theory, equally impacted by the same conditions), and 2) insight can only truly be gained by considering team metrics in an adversarial context rather than in isolation.
+
+The below code brings in the opposing team's aggregated metrics for each match (some metrics removed as not used further):
+
+```{r dataprep3, eval=TRUE, echo=TRUE, warning=FALSE, fig.height=2.4, fig.width=3.4}
+# Match-wise (adversarial) view of results
+  AFL.by.team.sub = AFL.by.team %>% select(-Disposals, -Frees, -Hit_outs)
+  AFL.by.match = merge(AFL.by.team.sub, AFL.by.team.sub %>% rename (Team.opp = Team), 
+                        by.x = c("Year","round","match_id","Team"), by.y = c("Year","round","match_id","vs_opponent"),
+                        suffixes = c("",".opp")) %>% select(-vs_opponent) %>% arrange(match_id)
+
+  head(AFL.by.match, 4)
+```
+
+## Analysis: Sport is adversarial (cont'd)
+
+Using some basic game knowledge, I created indices to compare team performance versus their match opposition. These were:
+
+Description | Calculation
+----------- | -----------
+Win the ball in contested situations | $idx.win.ground.ball = \log(contested.possessions/Opp.contested.possessions)$
+Mark the ball in contested situations | $idx.win.aerial.ball = \log(contested.marks/Opp.contested.marks)$
+Win first use from scrimmage | $idx.clear.ball = \log(clearances/Opp.clearances)$
+Make less errors than opposition | $idx.less.clangers = \log(Opp.clangers/clangers)$
+Teamwork for goal | $idx.goal.assist = \log[(goal.assists/goals)/(Opp.goal.assists/Opp.goals)]$
+Maintain clear possession | $idx.mark.kick = \log[(marks/kicks)/(Opp.marks/Opp.kicks)]$
+Accurate 50m entries | $idx.50m.entry = \log[(marks.inside.50/inside.50s)/(Opp.marks.inside.50/Opp.inside.50s)]$
+Work hard when not in possession | $idx.tackle = \log(tackles/Opp.tackles)$
+Win one-percenters | $idx.one.pct = \log(one.pct/Opp.one.pct)$, and
+Give away less penalties than opposition | $idx.less.frees = \log(Opp.frees.against/frees.against)$
+
+Note: there were three pairs of 0:Inf in the data which were changed to 0.01:1 prior to applying log. Draws were filtered out.
+
+```{r dataprep4, eval=TRUE, echo=FALSE, warning=FALSE}
+# Match-wise indices
+  AFL.by.match.idx = AFL.by.match %>% filter(match_score_idx != 1) %>% 
+    transmute(Year, round, match_id, Team, home_away, team_result, Q1_win, Q2_win, Q3_win, Q4_win, ET_win, match_score_idx, Team.opp, match_score_idx.opp,
+              idx_win_ground_ball = Contested_possessions/Contested_possessions.opp, idx_win_aerial_ball = Contested_marks/Contested_marks.opp,
+              idx_clear_ball = Clearances/Clearances.opp, idx_less_clangers = Clangers.opp/Clangers, idx_goal_assist = (Goal_assists/Goals)/(Goal_assists.opp/Goals.opp),
+              idx_mark_kick = (Marks/Kicks)/(Marks.opp/Kicks.opp), idx_50m_entry = (Marks_inside_50/Inside_50s)/(Marks_inside_50.opp/Inside_50s.opp),
+              idx_tackle = Tackles/Tackles.opp, idx_one_pct = One_pct/One_pct.opp, idx_less_frees = Frees_against.opp/Frees_against ) %>% 
+    # produces three pairs of 0-Inf
+    mutate(idx_goal_assist = if_else(idx_goal_assist == Inf, 1, if_else(idx_goal_assist == 0, 0.01, idx_goal_assist)),
+              idx_win_aerial_ball = if_else(idx_win_aerial_ball == Inf, 1, if_else(idx_win_aerial_ball == 0, 0.01, idx_win_aerial_ball)),
+    # take log10 to standardise the values
+              idx_win_ground_ball = log10(idx_win_ground_ball), idx_win_aerial_ball = log10(idx_win_aerial_ball), idx_clear_ball = log10(idx_clear_ball),
+              idx_less_clangers = log10(idx_less_clangers), idx_goal_assist = log10(idx_goal_assist), idx_mark_kick = log10(idx_mark_kick),
+              idx_50m_entry = log10(idx_50m_entry), idx_tackle = log10(idx_tackle), idx_one_pct = log10(idx_one_pct), idx_less_frees = log10(idx_less_frees))
+
+  head(AFL.by.match.idx, 6)
+```
+
+<!-- ## Sport is adversarial (cont'd) -->
+
+<!-- The following data and function were created to facilitate mosaic plots with Chi-square residuals on the following pages. -->
+
+```{r dataprep5, eval=TRUE, echo=FALSE, warning=FALSE}
+# Create copy of indices for mosaic plots
+  AFL.by.match.idx.mosaic = AFL.by.match.idx %>% select(match_id, Team, team_result, starts_with("idx_")) %>% 
+    mutate(team_result = factor(team_result, labels = c("Loss", "Win")))
+# Create mosaic plot function
+  ggplot_mosaic = function(in_df, X, fillvar, in_cuts, plot_title){
+    # Prepare table data from supplied parameters
+    xvar <- cut(in_df[[X]], in_cuts)
+    mos_df <- as.data.frame.matrix(table(xvar, in_df[[fillvar]]))
+    # Calculate the x and y coordinates of the rectangle extremes of each segment
+      # start with xmax and xmin    
+      mos_df$groupSum <- rowSums(mos_df)
+      mos_df$xmax <- cumsum(mos_df$groupSum)
+      mos_df$xmin <- mos_df$xmax - mos_df$groupSum
+      mos_df$groupSum <- NULL
+      # Use default row names in variable X so they can be referenced, reshape into long format
+      mos_df$xvar <- row.names(mos_df)
+      mos_df_melted <- melt(mos_df, id = c("xvar", "xmin", "xmax"), variable.name = "fillvar")
+      # Calculate ymax and ymin
+      mos_df_melted <- mos_df_melted %>% group_by(xvar) %>% mutate(ymax = cumsum(value/sum(value)), ymin = ymax - value/sum(value))
+    # Perform Chi-squared test
+      mos_df_chsq <- chisq.test(table(in_df[[fillvar]], xvar))
+      # Reshape into long format and identify variables consistent with mos_df_melted
+      mos_df_chsq_res <- melt(mos_df_chsq$residuals)
+      names(mos_df_chsq_res) <- c("fillvar", "xvar", "residual")
+    # Merge data
+    mos_df_all <- merge(mos_df_melted, mos_df_chsq_res)
+    # Positions for labels
+      # x axis: halfway between xmax and xmin of each segment, y axis: one label per FILL group at the right (max)
+      mos_df_all$xtext <- mos_df_all$xmin + (mos_df_all$xmax - mos_df_all$xmin)/2
+      index <- mos_df_all$xmax == max(mos_df_all$xmax)
+      mos_df_all$ytext <- mos_df_all$ymin[index] + (mos_df_all$ymax[index] - mos_df_all$ymin[index])/2
+    # Create and return mosaic plot, mapped to x and y coordinates, fill = residuals
+    gmos <- ggplot(mos_df_all, aes(ymin = ymin,  ymax = ymax, xmin = xmin, xmax = xmax, fill = residual)) +
+      geom_rect(col = "white") + labs(title = plot_title) +
+      # Add text to: x axis - effectively tick marks for each X; y axis - one for each FILL
+      geom_text(aes(x = xtext, label = xvar), y = 1, size = 2.5, angle = 90, hjust = 1, show.legend = FALSE) +
+      geom_text(aes(x = max(xmax),  y = ytext, label = fillvar), size = 3, hjust = 1, show.legend = FALSE) +
+      # Fill gradient for residuals per aes mapping (with default 2-color scale), label legend as "Residuals"
+      scale_fill_gradient2("Residuals", low = "red", high = "blue") +
+      # Place data adjacent to axes (no gap), other appearance changes
+      scale_x_continuous("Team results", expand = c(0,0)) + scale_y_continuous("Proportion", expand = c(0,0)) +
+      theme(legend.position = "top", legend.key.size = unit(0.2, "cm"), legend.text = element_text(size = 6), legend.title = element_text(size = 7),
+            plot.title = element_text(size = 9), axis.title = element_text(size = 7), axis.text = element_text(size = 6))
+    print(gmos) }
+```
+
+## Analysis: Visualising indices (pg.1 of 6)
+
+Plotting indices by year, showing median, IQR and range (Red/LHS = loss, Blue/RHS = win), corresponding mosaic plot coloured by Chi-squared residual:
+
+```{r exploreplot11, eval=TRUE, echo=FALSE, warning=FALSE, fig.height=2.6, fig.width=4.8}
+  plot_linerange_by_year(AFL.by.match.idx, "idx_win_ground_ball","idx_win_ground_ball: Win ground ball", "")
+  ggplot_mosaic(AFL.by.match.idx.mosaic, "idx_win_ground_ball", "team_result", 30, "")
+  plot_linerange_by_year(AFL.by.match.idx, "idx_win_aerial_ball","idx_win_aerial_ball: Win aerial ball", "")
+  ggplot_mosaic(AFL.by.match.idx.mosaic, "idx_win_aerial_ball", "team_result", 50, "")
+```
+
+## Analysis: Visualising indices (pg.2 of 6)
+
+Indices by year, showing median, IQR and range (Red/LHS = loss, Blue/RHS = win), corresponding mosaic plot coloured by Chi-squared residual:
+
+```{r exploreplot12, eval=TRUE, echo=FALSE, warning=FALSE, fig.height=2.6, fig.width=4.8}
+  
+  plot_linerange_by_year(AFL.by.match.idx, "idx_clear_ball","idx_clear_ball: Win first use", "")
+  ggplot_mosaic(AFL.by.match.idx.mosaic, "idx_clear_ball", "team_result", 30, "")
+  plot_linerange_by_year(AFL.by.match.idx, "idx_less_clangers","idx_less_clangers: Make less errors", "")
+  ggplot_mosaic(AFL.by.match.idx.mosaic, "idx_less_clangers", "team_result", 30, "")
+```
+
+## Analysis: Visualising indices (pg.3 of 6)
+
+Indices by year, showing median, IQR and range (Red/LHS = loss, Blue/RHS = win), corresponding mosaic plot coloured by Chi-squared residual:
+
+```{r exploreplot13, eval=TRUE, echo=FALSE, warning=FALSE, fig.height=2.6, fig.width=4.8}
+  plot_linerange_by_year(AFL.by.match.idx, "idx_goal_assist","idx_goal_assist: Teamwork for goal", "")
+  ggplot_mosaic(AFL.by.match.idx.mosaic, "idx_goal_assist", "team_result", 50, "")
+  plot_linerange_by_year(AFL.by.match.idx, "idx_mark_kick","idx_mark_kick: Maintain possession", "")
+  ggplot_mosaic(AFL.by.match.idx.mosaic, "idx_mark_kick", "team_result", 50, "")
+```
+
+## Analysis: Visualising indices (pg.4 of 6)
+
+Indices by year, showing median, IQR and range (Red/LHS = loss, Blue/RHS = win), corresponding mosaic plot coloured by Chi-squared residual:
+
+```{r exploreplot14, eval=TRUE, echo=FALSE, warning=FALSE, fig.height=2.6, fig.width=4.8}
+  plot_linerange_by_year(AFL.by.match.idx, "idx_50m_entry","idx_50m_entry: Accurate 50m entry", "")
+  ggplot_mosaic(AFL.by.match.idx.mosaic, "idx_50m_entry", "team_result", 40, "")
+  plot_linerange_by_year(AFL.by.match.idx, "idx_tackle","idx_tackle: Win ball back (tackles)", "")
+  ggplot_mosaic(AFL.by.match.idx.mosaic, "idx_tackle", "team_result", 30, "")
+```
+
+## Analysis: Visualising indices (pg.5 of 6)
+
+Indices by year, showing median, IQR and range (Red/LHS = loss, Blue/RHS = win), corresponding mosaic plot coloured by Chi-squared residual:
+
+```{r exploreplot15, eval=TRUE, echo=FALSE, warning=FALSE, fig.height=2.6, fig.width=4.8}
+  plot_linerange_by_year(AFL.by.match.idx, "idx_one_pct","idx_one_pct: Exceptional effort (1 percenters)", "")
+  ggplot_mosaic(AFL.by.match.idx.mosaic, "idx_one_pct", "team_result", 40, "")
+  plot_linerange_by_year(AFL.by.match.idx, "idx_less_frees","idx_less_frees: Discipline", "")
+  ggplot_mosaic(AFL.by.match.idx.mosaic, "idx_less_frees", "team_result", 40, "")
+```
+
+## Analysis: Visualising indices (pg.6 of 6)
+
+Finally, to check the distributions of the index data, I created a histogram function (Red/LHS = loss, Blue/RHS = win):
+
+```{r exploreplot16, eval=TRUE, echo=TRUE, warning=FALSE}
+ggplot_hist = function(in_df, xvar, in_width, plot_title){
+  ggph = ggplot(in_df, aes(x=in_df[[xvar]], fill=team_result)) + geom_histogram(binwidth = in_width, position = position_dodge(in_width), alpha=0.8) +
+            scale_fill_manual(labels = c("Loss","Win"), values = c("red","blue")) + labs(title = plot_title, color = "Result") +
+            theme(axis.title.x = element_blank(), axis.title.y = element_blank(), axis.text.x = element_text(size = 6),
+                  axis.text.y = element_text(size = 6), legend.position = "none", plot.title = element_text(size = 9))
+  return(ggph) }
+```
+
+```{r exploreplot16a, eval=TRUE, echo=FALSE, warning=FALSE, fig.height=1.4, fig.width=2.55}
+ggplot_hist(AFL.by.match.idx, "idx_win_ground_ball", 0.02, "idx_win_ground_ball distribution")
+ggplot_hist(AFL.by.match.idx, "idx_win_aerial_ball", 0.02, "idx_win_aerial_ball distribution") + scale_x_continuous(limits = c(-1,1))
+ggplot_hist(AFL.by.match.idx, "idx_clear_ball", 0.02, "idx_clear_ball distribution")
+ggplot_hist(AFL.by.match.idx, "idx_less_clangers", 0.02, "idx_less_clangers distribution")
+ggplot_hist(AFL.by.match.idx, "idx_goal_assist", 0.02, "idx_goal_assist distribution") + scale_x_continuous(limits = c(-0.6,0.6))
+ggplot_hist(AFL.by.match.idx, "idx_mark_kick", 0.02, "idx_mark_kick distribution") + scale_x_continuous(limits = c(-0.3,0.3))
+ggplot_hist(AFL.by.match.idx, "idx_50m_entry", 0.02, "idx_50m_entry distribution") + scale_x_continuous(limits = c(-0.7,0.7))
+ggplot_hist(AFL.by.match.idx, "idx_tackle", 0.02, "idx_tackle distribution") + scale_x_continuous(limits = c(-0.3,0.3))
+ggplot_hist(AFL.by.match.idx, "idx_one_pct", 0.02, "idx_one_pct distribution") + scale_x_continuous(limits = c(-0.4,0.4))
+ggplot_hist(AFL.by.match.idx, "idx_less_frees", 0.02, "idx_less_frees distribution") + scale_x_continuous(limits = c(-0.5,0.5))
+```
+
+## Analysis: Statistics of index relationships
+
+I ran two statistical tests on each "interesting" index seeking a relationship to wins: 1) re-randomization of results and 2) significance test.
+
+### Re-randomization: idx_win_ground_ball
+
+I re-randomized the win/loss results of the data 1000 times (commented code was run and results saved).
+
+```{r statistics01a, eval=TRUE, echo=TRUE, warning=FALSE}
+# AFL.by.match.idx.random = AFL.by.match.idx %>% select(team_result, starts_with("idx_")) %>% mutate(team_result = sample(0:1, nrow(AFL.by.match.idx.random), replace = TRUE))
+# AFL.by.match.idx.random.res = AFL.by.match.idx.random %>% group_by(team_result) %>%  summarise_all(funs(mean))
+# for(i in 2:1000){ AFL.by.match.idx.random$team_result = sample(0:1, nrow(AFL.by.match.idx.random), replace = TRUE)
+#                   AFL.by.match.idx.random.res = rbind(AFL.by.match.idx.random.res, AFL.by.match.idx.random %>% group_by(team_result) %>% summarise_all(funs(mean))) }
+load(file = ".\\AFL_by_match_idx_random_res.Rda")
+Xbar <- AFL.by.match.idx %>% select(team_result, starts_with("idx_")) %>% group_by(team_result) %>% summarise(mean(idx_win_ground_ball))
+print(as.list(AFL.by.match.idx.random.res %>% filter(team_result == 1 & (idx_win_ground_ball <= Xbar[[2]][[1]] | idx_win_ground_ball >= Xbar[[2]][[2]])) %>% count()))
+```
+
+There were zero re-randomisations with a mean equal to or greater than the mean of idx_win_ground_ball for Wins, so the first test indicates the result is **not random**.
+
+### Significance test: idx_win_ground_ball 
+
+```{r statistics01b, eval=TRUE, echo=TRUE, warning=FALSE}
+  print(as.data.frame(AFL.by.match.idx %>% group_by(team_result) %>% summarise(mean(idx_win_ground_ball), sd(idx_win_ground_ball), n())))
+```
+
+We assume the probability of winning any match is random (0.5). Null hypothesis: idx_win_ground_ball has no impact to the match result so its true mean is 0; $H_0:\mu=0$. Let X be the random variable idx_win_ground_ball in Wins.
+
+Assuming $\sigma=s=0.054310$, $z_\bar{X} = (0.028146-\mu)/\sigma = (0.028146-0)/0.054310 = 0.52$
+This z-score corresponds to a probability of 0.6985 so the team leading idx_win_ground_ball in an AFL match should win approximately 70% of the time **(Strong relationship)**.
+
+
+## Analysis: Statistics of index relationships (cont'd)
+
+Performing the same two tests on the remaining indices yielded these results:
+
+Index | Randomized Means > Idx Mean | Re-randomisation Test Result | Idx Z-score | Significance Test Result
+------------ | -------------------- | ------------------- | ----------- | ----------------------------------------------
+*idx_win_ground_ball* | *0* | *Index result is not random* | *0.52 (0.6985)* | *The team leading this index should win approx. 70% of the time (Strong)*
+idx_win_aerial_ball | 0 | Index result is not random | 0.33 (0.6293) | The team leading this index should win approx. 63% of the time **(Fair)**
+idx_clear_ball | 0 | Index result is not random | 0.27 (0.6064) | The team leading this index should win approx. 61% of the time **(Fair)**
+idx_less_clangers | 0 | Index result is not random | 0.30 (0.6179) | The team leading this index should win approx. 62% of the time **(Fair)**
+idx_goal_assist | 0 | Index result is not random | 0.12 (0.5478) | The team leading this index should win approx. 55% of the time **(Weak)**
+idx_mark_kick | 0 | Index result is not random | 0.19 (0.5753) | The team leading this index should win approx. 58% of the time **(Weak)**
+idx_50m_entry | 0 | Index result is not random | 0.45 (0.6736) | The team leading this index should win approx. 67% of the time **(Fair)**
+idx_tackle | 0 | Index result is not random | 0.16 (0.5636) | The team leading this index should win approx. 56% of the time **(Weak)**
+idx_one_pct | 0 | Index result is not random | 0.10 (0.5398) | The team leading this index should win approx. 54% of the time **(Weak)**
+idx_less_frees | 0 | Index result is not random | 0.06 (0.5239) | The team leading this index should win approx. 52% of the time **(Weak)**
+
+Interestingly, none of the indices tested as being random but most of them are fairly weak indicators of success if we regard the benchmark as being a 50% win rate.
+
+
+## Analysis: Selecting indices for Machine Learning
+
+The below correlation matrix shows there are a few metrics with stronger relationships to winning and a few potential multicollinearity pitfalls.
+
+```{r select01, eval=TRUE, echo=FALSE, warning=FALSE, fig.height=5, fig.width=5}
+  AFL.by.match.idx.1 = AFL.by.match.idx %>% select(-home_away, -ends_with("_win"), -ends_with(".opp"))
+  cormat = round(cor(AFL.by.match.idx.1 %>% select(-Year, -match_id, -Team, -round, -match_score_idx) %>% mutate(team_result = as.numeric(team_result))), 2)
+  cormat[lower.tri(cormat)]<- NA
+  cormat_melted = melt(cormat, na.rm = TRUE)
+  ggplot(data = cormat_melted, aes(Var2, Var1, fill = value)) + geom_tile(color = "white") +
+    scale_fill_gradient2(low = "red", high = "blue", mid = "white", midpoint = 0, limit = c(-1,1), space = "Lab", name="Pearson\nCorrelation") +
+    theme_minimal() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 8), axis.text.y = element_text(size = 8), axis.title = element_blank(),
+                            legend.title = element_text(size = 8), legend.text = element_text(size = 6), legend.key.size = unit(.3, "cm")) +
+    coord_fixed()
+```
+
+
+<!-- ## Selecting indices for machine learning (cont'd) -->
+
+<!-- Which indices are worth exploring further through machine learning and modelling? These index scores for wins only are a useful way to visualise "how often" a score above zero occurs in a win. -->
+
+<!-- ```{r select02, eval=TRUE, echo=FALSE, warning=FALSE, fig.height=4.5, fig.width=5} -->
+<!--   AFL.by.match.idx.1.tidy = AFL.by.match.idx.1 %>% arrange(match_id) %>%  -->
+<!--   select(-round, -Team, -match_score_idx) %>% filter(team_result == 1) %>% gather(key, value, -Year, -match_id, -team_result) -->
+
+<!--   ggplot(AFL.by.match.idx.1.tidy %>% filter(!(key %in% c("idx_50m_entry", "idx_goal_assist", "idx_less_frees", "idx_win_aerial_ball"))), aes(x = match_id, y = value)) + -->
+<!--   geom_line(aes(group = key), alpha = 0.6) + facet_wrap(~ key, nrow = 3) + geom_hline(yintercept = 0, size = 1, col = "blue") + -->
+<!--   theme(axis.text.x = element_text(size = 6, angle = 90)) -->
+<!-- ``` -->
+<!-- ```{r select03, eval=TRUE, echo=FALSE, warning=FALSE, fig.height=3, fig.width=5} -->
+<!--   ggplot(AFL.by.match.idx.1.tidy %>% filter((key %in% c("idx_50m_entry", "idx_goal_assist", "idx_less_frees", "idx_win_aerial_ball"))), aes(x = match_id, y = value)) + -->
+<!--   geom_line(aes(group = key), alpha = 0.6) + facet_wrap(~ key, nrow = 2) + geom_hline(yintercept = 0, size = 1, col = "blue") + -->
+<!--   theme(axis.text.x = element_text(size = 6, angle = 90)) -->
+<!-- ``` -->
+
+
+## Analysis: Selecting indices for Machine Learning (cont'd)
+
+The indices with the strongest statistical and visual relationship to wins are:
+
+- idx_win_ground_ball
+- idx_win_aerial_ball
+- idx_clear_ball
+- idx_50m_entry
+- idx_less_clangers
+
+I have also included idx_less_frees as it displays some correlation with idx_win_ground_ball and idx_less_clangers.
+
+
+# Machine Learning
+
+## ML: Feature engineering
+
+### Team proportion of top ten players per match
+
+In order to dive further into the analysis, I took the numerator of each indice and analysed the proportion of the top 10 players in each match belonging to each team; e.g. if 6 of the top 10 ground ball winners were from Team A, then A's score is 0.6 and B's is 0.4. These features will provide an alternative measure when performing decision tree and logistic regression analysis.
+
+This code takes a long time to run so it's commented out here and the saved data frame is loaded. The **setDT** function comes from the **data.table** package.
+
+```{r feat01, eval=TRUE, echo=TRUE, warning=FALSE}
+  # Get individual player metrics for each game
+  AFL.by.player.disagg = semi_join(AFL.by.player, AFL.by.match.idx.1, by = c("Team", "Year", "round", "match_id", "team_result")) %>% 
+    select(match_id, Year:Team, Clangers:Contested_possessions, Frees_against, Inside_50s, Marks_inside_50)
+  # Create function to calculate proportion of top 10 for a given metric in a given game
+  var.top.n = function(matchid, team.nm, pvar, n = 10){ DF = AFL.by.player.disagg %>% select(match_id, Team, pvar) %>% filter(match_id == matchid) %>% top_n(n)
+    prop.top.10 = (DF %>% filter(Team == team.nm) %>% count)/(nrow(DF))
+    return(prop.top.10) }
+  # Call function for each game
+    # AFL.by.player.agg = AFL.by.match.idx.1 %>% ungroup
+    # setDT(AFL.by.player.agg)[ , Clangers := var.top.n(match_id, Team, "Clangers", 10), by=c("match_id","Year","round","Team")]
+    # setDT(AFL.by.player.agg)[ , Clearances := var.top.n(match_id, Team, "Clearances", 10), by=c("match_id","Year","round","Team")]
+    # setDT(AFL.by.player.agg)[ , Contested_marks := var.top.n(match_id, Team, "Contested_marks", 10), by=c("match_id","Year","round","Team")]
+    # setDT(AFL.by.player.agg)[ , Contested_possessions := var.top.n(match_id, Team, "Contested_possessions", 10), by=c("match_id","Year","round","Team")]
+    # setDT(AFL.by.player.agg)[ , Frees_against := var.top.n(match_id, Team, "Frees_against", 10), by=c("match_id","Year","round","Team")]
+    # setDT(AFL.by.player.agg)[ , Inside_50s := var.top.n(match_id, Team, "Inside_50s", 10), by=c("match_id","Year","round","Team")]
+    # setDT(AFL.by.player.agg)[ , Marks_inside_50 := var.top.n(match_id, Team, "Marks_inside_50", 10), by=c("match_id","Year","round","Team")]
+```  
+```{r feat02, eval=TRUE, echo=FALSE, warning=FALSE}
+  load(file = "AFL_by_player_agg.Rda")
+  head(AFL.by.player.agg)
+```
+
+
+## ML: Data preparation
+
+### Splitting the data for baseline model assessment
+
+To create the models, I will train them with all data to the end of 2016 (5,374 records, 2,687 matches), therefore the 2017 season data will form the test set (408 records, 204 matches). Note that this test set includes the player metrics for the matches, which is data we would not normally have when predicting match results in the future.
+
+This data will be used to form a baseline assessment of **how well the indices predict match results generally**, i.e. demonstrating the statistical analysis which proved the relationship between the indices and winning.
+
+```{r mldp01, eval=TRUE, echo=TRUE, warning=FALSE}
+  train1 = subset(AFL.by.player.agg, AFL.by.player.agg$Year != 2017)
+  test1 = subset(AFL.by.player.agg, AFL.by.player.agg$Year == 2017)
+```
+
+
+## ML: Data preparation (cont'd)
+
+### Preparing realistic test data for prediction assessment
+
+To make predictions more realistic, I will also test the models against 2017 data with all fields redacted except match-up fixtures and which players were on the field. I used player averages from the 2016 season as a proxy for how each individual is expected to perform in 2017 and aggregated these metrics to team level to predict the match results. If a player did not have 2016 averages then there was no prediction of their 2017 performance. This data will be used to form an assessment of **how well the models actually perform at predicting future match outcomes**.
+
+```{r mldp02, eval=TRUE, echo=TRUE, warning=FALSE}
+  # Take player data for 2016 (one year), try to predict match results for 2017 based on averages
+  AFL.by.player.2016 = AFL.by.player %>% filter(Year %in% 2016) %>% select(-(Year:Team), -Played_pct, -(home_away:match_score_idx)) %>% 
+    group_by(Player) %>% summarise_all(.funs = mean) %>% select(Player, Contested_marks, Frees_against, Contested_possessions, Clangers, Marks_inside_50, Inside_50s)
+  head(data.frame(AFL.by.player.2016), 5)
+```
+```{r mldp03, eval=FALSE, echo=TRUE, warning=FALSE}
+  # Prepare 2017 predicted data
+  AFL.matches.2017.pred = AFL.by.player %>% filter(Year == 2017) %>% select(match_id, round, Team, vs_opponent, Player, team_result) %>% inner_join(AFL.by.player.2016, by = "Player")
+    # As before, take a team-wise view by summing up the player averages
+    AFL.matches.2017.pred.sum = AFL.matches.2017.pred %>% group_by(match_id, round, Team, vs_opponent, team_result) %>% summarise_at(vars(Contested_marks:Inside_50s), .funs = sum)
+    # Function to get proportion of top 10 players for Inside_50s, each team
+    i50.top.n <- function(matchid, team.nm, n = 10){ DF <- AFL.matches.2017.pred %>% select(match_id, Team, "Inside_50s") %>% filter(match_id == matchid) %>% top_n(n)
+      prop.top.10 <- (DF %>% filter(Team == team.nm) %>% count)/(nrow(DF))
+      return(prop.top.10) }
+    setDT(AFL.matches.2017.pred.sum)[ , Inside_50s_prop := i50.top.n(match_id, Team, 10), by=c("match_id","round","Team")]
+    # Prepare indices as per previous
+    AFL.matches.2017.pred.sum.1 = merge(AFL.matches.2017.pred.sum, AFL.matches.2017.pred.sum %>% rename(Team.opp=Team), by.x=c("match_id","round","Team"), by.y=c("match_id","round","vs_opponent"),
+      suffix=c("",".opp")) %>% mutate(idx_win_ground_ball = log10(Contested_possessions/Contested_possessions.opp), idx_win_aerial_ball = log10(Contested_marks/Contested_marks.opp),
+      idx_less_clangers = log10(Clangers.opp/Clangers), idx_50m_entry = log10((Marks_inside_50/Inside_50s)/(Marks_inside_50.opp/Inside_50s.opp)),
+      idx_less_frees = log10(Frees_against.opp/Frees_against)) %>% select(match_id:team_result, starts_with("idx_"), Inside_50s = Inside_50s_prop)
+```
+```{r mldp04, eval=TRUE, echo=FALSE, warning=FALSE}
+load(file = "AFL_matches_2017_pred_sum_1.Rda")
+head(AFL.matches.2017.pred.sum.1, 4)
+```
+
+
+## ML: Data preparation (cont'd)
+
+### Clustering data for boosted prediction
+
+To boost the predictive accuracy of the models, I used k-means clustering to consider games with "similar attributes" together. I chose six clusters, representing teams finishing at the top, middle and bottom of the ladder, and moving the ball either quickly or slowly (3x2). The code below requires the R package **flexclust**.
+
+```{r mldp05, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE}
+  library(flexclust)
+```
+
+```{r mldp06, eval=TRUE, echo=TRUE, warning=FALSE}
+  # create matrices for training and test data, since clustering requires numerical data
+  train1_Matrix = as.matrix(train1 %>% select(idx_win_ground_ball, idx_win_aerial_ball, idx_less_clangers, idx_50m_entry, idx_less_frees, Inside_50s))
+  AFL.matches.2017.pred.sum.1_Matrix = as.matrix(AFL.matches.2017.pred.sum.1 %>% select(idx_win_ground_ball:Inside_50s))
+  
+  # cluster the training set
+  k=6
+  set.seed(1)
+  train1_kmc = kmeans(train1_Matrix, centers = k, iter.max = 10000)
+  train1_clusters = train1_kmc$cluster
+  
+  # apply the training clustering algorithm to the test data
+  train1_kcca = as.kcca(train1_kmc, train1_Matrix)
+  AFL.matches.2017.pred.sum.1_clusters = predict(train1_kcca, newdata = AFL.matches.2017.pred.sum.1_Matrix)
+  
+  # split out the data sets
+  train1_clust1 = subset(train1, train1_clusters==1)  
+  train1_clust2 = subset(train1, train1_clusters==2)    
+  train1_clust3 = subset(train1, train1_clusters==3)  
+  train1_clust4 = subset(train1, train1_clusters==4)    
+  train1_clust5 = subset(train1, train1_clusters==5)  
+  train1_clust6 = subset(train1, train1_clusters==6)   
+  pred2017_clust1 = subset(AFL.matches.2017.pred.sum.1, AFL.matches.2017.pred.sum.1_clusters==1)
+  pred2017_clust2 = subset(AFL.matches.2017.pred.sum.1, AFL.matches.2017.pred.sum.1_clusters==2)
+  pred2017_clust3 = subset(AFL.matches.2017.pred.sum.1, AFL.matches.2017.pred.sum.1_clusters==3)
+  pred2017_clust4 = subset(AFL.matches.2017.pred.sum.1, AFL.matches.2017.pred.sum.1_clusters==4)
+  pred2017_clust5 = subset(AFL.matches.2017.pred.sum.1, AFL.matches.2017.pred.sum.1_clusters==5)
+  pred2017_clust6 = subset(AFL.matches.2017.pred.sum.1, AFL.matches.2017.pred.sum.1_clusters==6)
+```
+
+
+
+## ML: Model 1 - Basic Decision Tree
+
+### Creating a basic decision tree
+
+Predicting a win or loss is a classification problem so a decision tree is an obvious method to try. Here is a first-cut tree with bucket size of 25. The **rpart**, **rpart.plot** and **ROCR** libraries are loaded.
+
+```{r mlcart01, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE}
+  library(rpart)
+  library(rpart.plot)
+  library(ROCR)
+```
+
+```{r mlcart02, eval=TRUE, echo=TRUE, warning=FALSE, fig.height=2.5, fig.width=6.5}
+  tree1 = rpart(team_result ~ idx_win_ground_ball + idx_win_aerial_ball + idx_clear_ball + idx_less_clangers + idx_50m_entry + idx_less_frees + Clangers + Clearances + Contested_marks + Contested_possessions + Frees_against + Inside_50s + Marks_inside_50,
+                data = train1, method = "class", control = rpart.control(minbucket=25))
+  prp(tree1, extra = 1, fallen.leaves = TRUE, varlen = 0)
+  # only keep variables shown on tree
+  tree1_V2 = rpart(team_result ~ idx_win_ground_ball + idx_50m_entry + Inside_50s,
+                   data = train1, method = "class", control = rpart.control(minbucket=25))
+```
+
+## ML: Model 1 - Basic Decision Tree (cont'd)
+
+### Model baseline assessment
+
+Using a decision tree based on match indices, how well does the model predict 2017's match results (classification accuracy and area under the ROC curve [AUC])? Note that this test data includes the 2017 player metrics so it is not a "true" prediction.
+
+```{r mlcart03, eval=TRUE, echo=TRUE, warning=FALSE, fig.height=2.8, fig.width=4.8}
+  table(test1$team_result, predict(tree1_V2, newdata = test1, type = "class"))
+
+  pred_tree1ROC = predict(tree1, newdata = test1) # note: changing threshold did not improve results
+  pred_tree1R = prediction(pred_tree1ROC[ ,2], test1$team_result)
+  perf_tree1R = performance(pred_tree1R, "tpr", "fpr")
+    par(cex = 0.6)
+    plot(perf_tree1R, col="blue", main="ROC Curve for Decision Tree - Basic", print.cutoffs.at = seq(0, 1, 0.1), text.adj = c(-0.2, 1.7))
+    text(0.9, 0.4, labels = paste("AUC = ", round(as.numeric(performance(pred_tree1R, "auc")@y.values),2),sep=""), adj=1, cex = 1.5)
+    text(0.9, 0.22, labels = paste("Class accuracy = ", round((159+154)/408,2)*100, "%", sep=""), adj=1, cex = 1.5)
+```
+
+
+## ML: Model 1 - Basic Decision Tree (cont'd)
+
+### Model prediction assessment
+
+The basic decision tree was not great at predicting 2017 match results (when the player metrics were also predicted using 2016 averages). It achieved a classification (win/not win) accuracy of 61% and AUC of 0.59. 
+
+```{r mlcart04, eval=TRUE, echo=TRUE, warning=FALSE, fig.height=2.8, fig.width=4.8}
+  pred_tree1_2017 = predict(tree1_V2, newdata = AFL.matches.2017.pred.sum.1, type = "class")
+  table(AFL.matches.2017.pred.sum.1$team_result, pred_tree1_2017)
+  
+  pred_tree1_2017pr = predict(tree1_V2, newdata = AFL.matches.2017.pred.sum.1)
+  pred_tree1_2017ROC = prediction(pred_tree1_2017pr[ ,2], AFL.matches.2017.pred.sum.1$team_result)
+  perf_tree1_2017ROC = performance(pred_tree1_2017ROC, "tpr", "fpr")
+    par(cex = 0.6)
+    plot(perf_tree1_2017ROC, col="blue", main="ROC Curve for Decision Tree - Basic", print.cutoffs.at = seq(0, 1, 0.1), text.adj = c(-0.2, 1.7))
+    text(0.9, 0.4, labels = paste("AUC = ", round(as.numeric(performance(pred_tree1_2017ROC, "auc")@y.values),2),sep=""), adj=1, cex = 1.5)
+    text(0.9, 0.22, labels = paste("Class accuracy = ", round((112+139)/414,2)*100, "%", sep=""), adj=1, cex = 1.5)
+```    
+
+
+## ML: Model 2 - Tuned Decision Tree
+
+### Tuning to create a better tree
+
+I performed cross-validation of the tree to find the right complexity parameter (cp), which returned a value of 0.0022. This is used instead of min bucket size, which is often a blind guess when tuning a decision tree.
+
+```{r mlcarttuned01, eval=FALSE, echo=TRUE, warning=FALSE}
+  fitControl = trainControl(method = "cv", number = 10)
+  cpGrid = expand.grid(.cp=(1:50)*0.0001)
+  train(team_result ~ idx_win_ground_ball + idx_win_aerial_ball + idx_clear_ball + idx_less_clangers + idx_50m_entry + idx_less_frees + Clangers + Clearances + Contested_marks + Contested_possessions + Frees_against + Inside_50s + Marks_inside_50,
+        data = train1, method = "rpart", trControl = fitControl, tuneGrid = cpGrid)
+```
+
+However, this cp produced too many levels in the tree to be meaningfully translated into insights so instead I used cp = 0.005. I then reduced the tree to only those variables which split the nodes.
+
+```{r mlcarttuned02, eval=TRUE, echo=TRUE, warning=FALSE, fig.height=3.3, fig.width=8}
+  tree2 = rpart(team_result ~ idx_win_ground_ball + idx_win_aerial_ball + idx_clear_ball + idx_less_clangers + idx_50m_entry + idx_less_frees + Clangers + Clearances + Contested_marks + Contested_possessions + Frees_against + Inside_50s + Marks_inside_50,
+                data = train1, method = "class", control = rpart.control(cp = 0.005))
+  tree2_V2 = rpart(team_result ~ idx_win_ground_ball + idx_less_clangers + idx_50m_entry + Inside_50s,
+                  data = train1, method = "class", control = rpart.control(cp = 0.005))
+  prp(tree2_V2, extra = 1, fallen.leaves = TRUE, varlen = 0)
+```
+
+
+## ML: Model 2 - Tuned Decision Tree (cont'd)
+
+### Model baseline assessment
+
+Testing the tuned decision tree with 2017 data including player metrics, the below shows a marginal improvement in AUC but not much impact on the classification accuracy over the basic tree model.
+
+```{r mlcarttuned03, eval=TRUE, echo=TRUE, warning=FALSE, fig.height=2.8, fig.width=4.8}
+  table(test1$team_result, predict(tree2_V2, newdata = test1, type = "class"))
+
+  pred_tree2ROC = predict(tree2_V2, newdata = test1) # note: changing threshold to 0.6 did not improve results
+  pred_tree2R = prediction(pred_tree2ROC[ ,2], test1$team_result)
+  perf_tree2R = performance(pred_tree2R, "tpr", "fpr")
+    par(cex = 0.6)
+    plot(perf_tree2R, col="blue", main="ROC Curve for Decision Tree - Tuned", print.cutoffs.at = seq(0, 1, 0.1), text.adj = c(-0.2, 1.7))
+    text(0.9, 0.4, labels = paste("AUC = ", round(as.numeric(performance(pred_tree2R, "auc")@y.values),2),sep=""), adj=1, cex = 1.5)
+    text(0.9, 0.22, labels = paste("Class accuracy = ", round((168+148)/408,2)*100, "%", sep=""), adj=1, cex = 1.5)
+```
+
+
+## ML: Model 2 - Tuned Decision Tree (cont'd)
+
+### Model prediction assessment
+
+Redacting the 2017 player metrics, the tuned decision tree was marginally better than the basic decision tree at predicting 2017's match results with a classification accuracy of 64% and AUC of 0.63.
+
+```{r mlcarttuned04, eval=TRUE, echo=TRUE, warning=FALSE, fig.height=2.8, fig.width=4.8}
+  pred_tree2_2017 = predict(tree2_V2, newdata = AFL.matches.2017.pred.sum.1, type = "class")
+  table(AFL.matches.2017.pred.sum.1$team_result, pred_tree2_2017)
+  
+  pred_tree2_2017pr = predict(tree2_V2, newdata = AFL.matches.2017.pred.sum.1)
+  pred_tree2_2017ROC = prediction(pred_tree2_2017pr[ ,2], AFL.matches.2017.pred.sum.1$team_result)
+  perf_tree2_2017ROC = performance(pred_tree2_2017ROC, "tpr", "fpr")
+    par(cex = 0.6)
+    plot(perf_tree2_2017ROC, col="blue", main="ROC Curve for Decision Tree - Tuned", print.cutoffs.at = seq(0, 1, 0.1), text.adj = c(-0.2, 1.7))
+    text(0.9, 0.4, labels = paste("AUC = ", round(as.numeric(performance(pred_tree2_2017ROC, "auc")@y.values),2),sep=""), adj=1, cex = 1.5)
+    text(0.9, 0.22, labels = paste("Class accuracy = ", round((136+131)/414,2)*100, "%", sep=""), adj=1, cex = 1.5)
+``` 
+
+
+## ML: Model 2 - Tuned Decision Tree (cont'd)
+
+### Clustered model prediction assessment
+
+The tuned decision trees for each of the six training clusters were created the same way as above, i.e. the ideal complexity parameter was determined and then adjusted to make results interpretable. This resulted in six models, one for each cluster. We'll assume a threshold of 0.5 for all clusters.
+
+```{r mlcarttuned05, eval=TRUE, echo=FALSE, warning=FALSE}
+  tree_clust1 = rpart(team_result ~ idx_win_ground_ball + idx_win_aerial_ball + idx_less_clangers + idx_50m_entry + idx_less_frees + Inside_50s,
+                      data = train1_clust1, method = "class", control = rpart.control(cp = 0.02))
+  tree_clust2 = rpart(team_result ~ idx_win_ground_ball + idx_win_aerial_ball + idx_less_clangers + idx_50m_entry + idx_less_frees + Inside_50s,
+                      data = train1_clust2, method = "class", control = rpart.control(cp = 0.034))
+  tree_clust3 = rpart(team_result ~ idx_win_ground_ball + idx_win_aerial_ball + idx_less_clangers + idx_50m_entry + idx_less_frees + Inside_50s,
+                      data = train1_clust3, method = "class", control = rpart.control(cp = 0.02))
+  tree_clust4 = rpart(team_result ~ idx_win_ground_ball + idx_win_aerial_ball + idx_less_clangers + idx_50m_entry + idx_less_frees + Inside_50s,
+                      data = train1_clust4, method = "class", control = rpart.control(cp = 0.01))
+  tree_clust5 = rpart(team_result ~ idx_win_ground_ball + idx_win_aerial_ball + idx_less_clangers + idx_50m_entry + idx_less_frees + Inside_50s,
+                      data = train1_clust5, method = "class", control = rpart.control(cp = 0.019))
+  tree_clust6 = rpart(team_result ~ idx_win_ground_ball + idx_win_aerial_ball + idx_less_clangers + idx_50m_entry + idx_less_frees + Inside_50s,
+                      data = train1_clust6, method = "class", control = rpart.control(cp = 0.038))
+```
+
+As before, I checked the classification accuracy of each cluster decision tree as well as AUC. Below is an example for cluster 1, followed by a summary of results for all clusters:
+
+```{r mlcarttuned06, eval=TRUE, echo=TRUE, warning=FALSE}
+  # find class accuracy
+  table(pred2017_clust1$team_result, predict(tree_clust1, newdata = pred2017_clust1, type = "prob")[,2] > 0.5)
+  # find AUC
+  pred_tree_clust1_2017 = prediction(predict(tree_clust1, newdata = pred2017_clust1)[ ,2], pred2017_clust1$team_result)
+  round(as.numeric(performance(pred_tree_clust1_2017, "auc")@y.values),2)
+``` 
+
+Cluster | Games | Class accuracy | AUC
+------ | ------ | ------ | ------
+1 | 11 | 100% | 1.00
+2 | 17 | 65% | 0.50
+3 | 43 | 67% | 0.65
+4 | 133 | 65% | 0.65
+5 | 146 | 64% | 0.63
+6 | 64 | 66% | 0.66
+
+The weighted average class accuracy was 65% and AUC was 0.65, both marginally better than the non-clustered model.
+
+
+## ML: Model 3 - Logistic Regression
+
+### Creating a logistic regression model
+
+A logistic regression model seeks a linear relationship in a classification problem. The following shows the output of a logistic regression using all variables.
+
+```{r mllog01, eval=TRUE, echo=FALSE, warning=FALSE}
+  log3a = glm(team_result ~ Contested_marks + Clearances + Contested_possessions + Clangers + idx_win_aerial_ball + Marks_inside_50 + idx_less_frees + idx_win_ground_ball + idx_clear_ball + idx_less_clangers + idx_50m_entry + Frees_against + Inside_50s,
+               data = train1, family = binomial)
+  summary(log3a)
+```
+
+
+## ML: Model 3 - Logistic Regression (cont'd)
+
+I removed non-significant variables one at a time and did not find significant multicollinearity among the remaining variables. The remaining model represents the best linear relationship between training x variables explaining y, where all x variables are statistically significant. The below output has been tidied using the **broom** package.
+
+```{r mllog02, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE}
+  library(broom)
+```
+
+```{r mllog03, eval=TRUE, echo=FALSE, warning=FALSE}
+  log3 = glm(team_result ~ idx_win_aerial_ball + idx_less_frees + idx_win_ground_ball + idx_less_clangers + idx_50m_entry + Inside_50s,
+               data = train1, family = binomial)
+  tidy(log3)
+```
+
+```{r mllog04, eval=TRUE, echo=TRUE, warning=FALSE}
+  cor(train1 %>% transmute(team_result = as.numeric(team_result), idx_win_aerial_ball, idx_less_frees, idx_win_ground_ball, idx_less_clangers, idx_50m_entry, Inside_50s))
+```
+
+
+## ML: Model 3 - Logistic Regression (cont'd)
+
+### Model baseline assessment
+
+Testing the logistic regression model with 2017 data including player metrics, the below shows another improvement in AUC but no real impact on the classification accuracy over both tree models. The ROC curve shows we could pick a threshold value of 0.4 or 0.6 to improve results but we'll stick with 0.5.
+
+```{r mllog05, eval=TRUE, echo=TRUE, warning=FALSE, fig.height=2.8, fig.width=4.8}
+  pred_log3 = predict(log3, type = "response", newdata = test1)  
+  table(test1$team_result, pred_log3 >= 0.5)
+
+  pred_log3R = prediction(pred_log3, test1$team_result) 
+  perf_log3R = performance(pred_log3R, "tpr", "fpr")
+    par(cex = 0.6)
+    plot(perf_log3R, col="blue", main="ROC Curve for Logistic Regression model", print.cutoffs.at = seq(0, 1, 0.1), text.adj = c(-0.2, 1.7))
+    text(0.9, 0.4, labels = paste("AUC = ", round(as.numeric(performance(pred_log3R, "auc")@y.values),2),sep=""), adj=1, cex = 1.5)
+    text(0.9, 0.22, labels = paste("Class accuracy = ", round(158/(158+46),2)*100, "%", sep=""), adj=1, cex = 1.5)
+```
+
+
+## ML: Model 3 - Logistic Regression (cont'd)
+
+### Model prediction assessment
+
+Redacting the 2017 player metrics, the logistic regression model lost out to both decision trees at predicting 2017's match results with a classification accuracy of 63%. However its AUC of 0.65 was marginally higher.
+
+```{r mllog06, eval=TRUE, echo=TRUE, warning=FALSE, fig.height=2.8, fig.width=4.8}
+  pred_log3_2017 = predict(log3, newdata = AFL.matches.2017.pred.sum.1, type = "response")
+  table(AFL.matches.2017.pred.sum.1$team_result, pred_log3_2017 > 0.5)
+  
+  pred_log3_2017pr = predict(log3, newdata = AFL.matches.2017.pred.sum.1)
+  pred_log3_2017ROC = prediction(pred_log3_2017pr, AFL.matches.2017.pred.sum.1$team_result)
+  perf_log3_2017ROC = performance(pred_log3_2017ROC, "tpr", "fpr")
+    par(cex = 0.6)
+    plot(perf_log3_2017ROC, col="blue", main="ROC Curve for Logistic Regression model", print.cutoffs.at = seq(0, 1, 0.1), text.adj = c(-0.2, 1.7))
+    text(0.9, 0.4, labels = paste("AUC = ", round(as.numeric(performance(pred_log3_2017ROC, "auc")@y.values),2),sep=""), adj=1, cex = 1.5)
+    text(0.9, 0.22, labels = paste("Class accuracy = ", round((131+128)/414,2)*100, "%", sep=""), adj=1, cex = 1.5)
+```
+
+
+## ML: Model 3 - Logistic Regression (cont'd)
+
+### Clustered model prediction assessment
+
+The logistic regression models for each of the six training clusters were created the same way as above, i.e. non-significant predictor variables removed one by one until only significant variables remain, then checked for multicollinearity. We'll assume a threshold of 0.5 for all clusters.
+
+```{r mllog07, eval=TRUE, echo=FALSE, warning=FALSE}
+  log_clust1 = glm(team_result ~ idx_win_ground_ball + idx_less_clangers + idx_50m_entry + idx_less_frees + Inside_50s,
+                   data = train1_clust1, family = binomial)
+  log_clust2 = glm(team_result ~ idx_win_ground_ball + idx_less_clangers + idx_50m_entry + idx_less_frees + Inside_50s,
+                   data = train1_clust2, family = binomial)
+  log_clust3 = glm(team_result ~ idx_less_frees + idx_win_ground_ball + idx_less_clangers + idx_50m_entry + Inside_50s,
+                   data = train1_clust3, family = binomial)
+  log_clust4 = glm(team_result ~ idx_less_frees + idx_win_ground_ball + idx_less_clangers + idx_50m_entry + Inside_50s,
+                   data = train1_clust4, family = binomial)
+  log_clust5 = glm(team_result ~ idx_win_ground_ball + idx_less_clangers + idx_50m_entry + idx_less_frees + Inside_50s,
+                   data = train1_clust5, family = binomial)
+  log_clust6 = glm(team_result ~ idx_win_ground_ball + idx_less_clangers + idx_50m_entry + idx_less_frees + Inside_50s,
+                   data = train1_clust6, family = binomial)
+```
+
+As before, I checked the classification accuracy of each cluster regression model as well as AUC. Below is an example for cluster 1, followed by a summary of results for all clusters:
+
+```{r mllog08, eval=TRUE, echo=TRUE, warning=FALSE}
+  # find class accuracy
+  pred_log_clust1_2017 = predict(log_clust1, type = "response", newdata = pred2017_clust1)
+  table(pred2017_clust1$team_result, pred_log_clust1_2017 >= 0.5)
+  # find AUC
+  pred_log_clust1R_2017 = prediction(pred_log_clust1_2017, as.factor(pred2017_clust1$team_result))
+  round(as.numeric(performance(pred_log_clust1R_2017, "auc")@y.values),2)
+``` 
+
+Cluster | Games | Class accuracy | AUC
+------ | ------ | ------ | ------
+1 | 11 | 91% | 0.94
+2 | 17 | 65% | 0.76
+3 | 43 | 70% | 0.60
+4 | 133 | 60% | 0.62
+5 | 146 | 60% | 0.57
+6 | 64 | 69% | 0.75
+
+The weighted average class accuracy was 63% and AUC was 0.63, so no improvement on the non-clustered model.
+
+
+## ML: Model 3 - Logistic Regression (cont'd)
+
+### Model interpretation - variable significance
+
+To uncover further insights, using the non-clustered logistic regression model I checked the relative importance of each variable by leaving out one at a time to measure the AUC lift provided by the variable. The table below summarises the results, which are a key conclusion for the analysis.
+
+```{r mllog09, eval=FALSE, echo=TRUE, warning=FALSE}
+  logx = glm(team_result ~ idx_win_aerial_ball + idx_less_frees + idx_win_ground_ball + idx_less_clangers + idx_50m_entry + Inside_50s,
+             data = train1, family = binomial)
+  pred_logxR = prediction(predict(logx, type = "response", newdata = test1), test1$team_result)
+  as.numeric(performance(pred_logxR, "auc")@y.values)
+```
+
+Variable | AUC lift | Ranking | Comment
+-------- | -------- | ---- | ----------------------------- 
+idx_win_aerial_ball     | -0.01     | Last    | AUC went up without this variable, likely due to multicollinearity
+idx_less_frees          | +0.00     | 5th     | Negligible impact to AUC
+**idx_win_ground_ball** | **+0.03** | **2nd** | **Strong impact to AUC**
+idx_less_clangers       | +0.01     | =3rd    | Some impact to AUC
+**idx_50m_entry**       | **+0.04** | **1st** | **Strong impact to AUC**
+Inside_50s              | +0.01     | =3rd    | Some impact to AUC
+
+
+# Conclusions
+
+## Findings
+
+### Key indicators to winning AFL matches
+
+This analysis demonstrated and confirmed long-held assumptions on how AFL matches are won. The two key measures teams should strive towards to win more matches are:
+
+- Winning more of the ground ball in contested situations than the other team, and
+- Being more accurate entering the forward 50m arc than the other team.
+
+It also helps to have more contributors to entering the forward 50m arc generally, and to make less unforced mistakes than opponents. If I was a coach, during this off-season my focus would be on these factors as well as using data to recruit players with strong abilities in these areas.
+
+### Predicting AFL match results
+
+Data has a stronger than expected ability to predict match results, given the adversarial nature of sport. A well-tuned decision tree or logistic regression model does a reasonable job of "blind" predicting future match results when player metrics from the predicted season are redacted. Clustering also proved to be a potential method of boosting predictive accuracy for decision trees in particular.
+
+
+## Opportunities for further analysis
+
+### Increasing predictive accuracy further
+
+To keep the analysis simple, I only performed clustering once using six clusters, and when testing model predictions I consistently kept a threshold value of 0.5. Adjusting either or both of these can have a decent impact to accuracy; for example, using the ROC Curve to choose the threshold boosted accuracy in some cases. However, for a true prediction we don't have access to the ROC Curve so we would need to be very confident in the chosen threshold value for a particular cluster.
+
+Similarly, changing the number of clusters might improve accuracy but lose interpretability of results.
+
+### Methodology for prediction
+
+I used 2016 player metric means to predict 2017 match results; this is a very unsophisticated method of assuming the independent variables. I tried linear regression but this degraded results. So there is a clear opportunity to create smarter prediction models for the independent variables used to predict match results; for example, this could consider how a player's output normally changes over the course of their career, impact of injuries on long-term performance, how players fare against specific opponents or on specific grounds etc.
+
+
+## Wrap up
+
+Overall, this analysis is a great proof-of-concept of the insights which could be uncovered in AFL to gain a competitive advantage on the pitch. This project only used player metrics to predict team results, yet came up with stronger predictive capability than I thought was likely in sport. For a simple analysis on free data, it has been surprisingly insightful.
+
+There is a huge amount of scope to improve the analysis:
+
+- Using full Champion Data, including efficiency statistics and play-by-play analysis
+- Combining player GPS tracker data to understand how running patterns and workrate interplay with efficiency and winning plays
+
+This approach can also be applied to other sports.
