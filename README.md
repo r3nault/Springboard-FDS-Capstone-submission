@@ -16,6 +16,12 @@ This analysis is a proof-of-concept using data science techniques in a sports an
 - Code: *code-02-prepare-yvars-matchresults.R*
 - Saved data: *team_results.Rda*
 
+## Data wrangling, Exploratory Analysis and Feature Engineering
+Steps required to merge raw data into meaningful data frames, perform visualisation and initial statistical analysis for exploration of data relationships and generate indices (features) of the data to facilitate deeper analysis.
+
+- Code: *code-03-datawrangling-EDA.R*
+
+
 # Final reports
 Note- R markdown files use the css file: *ioslides.css*
 
