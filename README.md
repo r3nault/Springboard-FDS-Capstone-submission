@@ -26,7 +26,11 @@ Steps to run two statistical tests of the engineered indices to find their signi
 
 - Code: *code-04-index-statistical-analysis.R*
 
+## Machine Learning & Modelling
+Steps to run machine learning algorithms including training and testing models, and attempting prediction by redacting the most recent season of data. Machine learning was run non-clustered (1) and clustered (2).
 
+- Code 1: *code-05-machine-learning.R*
+- Code 2: *code-06-machine-learning-clustered.R*
 
 # Final reports
 Note- R markdown files use the css file: *ioslides.css*
