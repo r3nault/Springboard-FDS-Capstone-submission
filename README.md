@@ -21,6 +21,12 @@ Steps required to merge raw data into meaningful data frames, perform visualisat
 
 - Code: *code-03-datawrangling-EDA.R*
 
+## Statistical analysis of indices
+Steps to run two statistical tests of the engineered indices to find their significance.
+
+- Code: *code-04-index-statistical-analysis.R*
+
+
 
 # Final reports
 Note- R markdown files use the css file: *ioslides.css*
